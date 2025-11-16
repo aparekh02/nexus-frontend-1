@@ -1,0 +1,45 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Onboarding {
+  id        String   @id @default(cuid())
+  userId    String   @unique // Clerk user ID
+
+  // Step 1: Project Basics
+  projectDescription String?
+  targetUser         String?
+  problemSolved      String?
+  currentStage       String? // dropdown: "Idea", "MVP", "Early Stage", "Growth", "Scaling"
+
+  // Step 2: GitHub Integration
+  githubRepoUrl      String?
+  githubAccessToken  String? // Encrypted
+
+  // Step 3: Goals and Metrics
+  shortTermGoals     String[] // Array of goals
+  longTermGoals      String[] // Array of goals
+  kpis               String[] // Array of KPIs
+  constraints        String?
+
+  // Step 4: Optional Info
+  competitors        String[] // Array of competitor names
+  industryCategory   String?
+  techStackPreferences String[] // Array of tech preferences
+
+  // Meta
+  currentStep        Int      @default(1) // For save and resume
+  isCompleted        Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId])
+}
