@@ -60,7 +60,8 @@ def validate_environment():
 
     if missing:
         logger.error(f"Missing required environment variables: {', '.join(missing)}")
-        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+        logger.error("Set these in Render Dashboard > Environment > Environment Variables")
+        return False
 
     # Warn about missing API keys
     gemini_keys = [k for k in [os.getenv(f"GEMINI_API_KEY_{i}") for i in range(1, 7)] if k]
@@ -72,8 +73,9 @@ def validate_environment():
         logger.warning("No EXA API keys configured - search features will not work")
 
     logger.info(f"Environment validated: {len(gemini_keys)} Gemini keys, {len(exa_keys)} EXA keys")
+    return True
 
-validate_environment()
+ENV_VALID = validate_environment()
 
 # ============================================================
 # RATE LIMITING
@@ -117,8 +119,8 @@ rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("RATE_LIMIT_PER_MIN
 # CONFIGURATION
 # ============================================================
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 # Gemini API Keys - Planner uses 1-3, Others use 4-6
 GEMINI_PLANNER_KEYS = [
@@ -152,7 +154,16 @@ api_state = {
     "exa_paused_until": None,
 }
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Initialize Supabase client with error handling
+supabase: Optional[Client] = None
+try:
+    if SUPABASE_URL and SUPABASE_KEY:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Supabase client initialized successfully")
+    else:
+        logger.error("Supabase credentials missing - database features disabled")
+except Exception as e:
+    logger.error(f"Failed to initialize Supabase client: {e}")
 
 # Cache for tweepy clients (user_id -> client)
 tweepy_clients: Dict[str, tweepy.Client] = {}
