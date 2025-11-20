@@ -1,6 +1,6 @@
 """
 Marketing Campaign Backend - FastAPI Server
-All swarms connected with streaming output
+Production-ready with security, logging, and monitoring
 """
 
 import os
@@ -8,13 +8,20 @@ import sys
 import json
 import uuid
 import asyncio
+import logging
+import hashlib
+import secrets
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
+from collections import defaultdict
+import time
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, validator
 import google.generativeai as genai
 import tweepy
 from supabase import create_client, Client
@@ -29,6 +36,82 @@ from sumy.nlp.stemmers import Stemmer
 from sumy.utils import get_stop_words
 
 load_dotenv()
+
+# ============================================================
+# LOGGING CONFIGURATION
+# ============================================================
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+logger = logging.getLogger("nexus-backend")
+
+# ============================================================
+# ENVIRONMENT VALIDATION
+# ============================================================
+
+def validate_environment():
+    """Validate required environment variables"""
+    required_vars = ["SUPABASE_URL", "SUPABASE_KEY"]
+    missing = [var for var in required_vars if not os.getenv(var)]
+
+    if missing:
+        logger.error(f"Missing required environment variables: {', '.join(missing)}")
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+    # Warn about missing API keys
+    gemini_keys = [k for k in [os.getenv(f"GEMINI_API_KEY_{i}") for i in range(1, 7)] if k]
+    exa_keys = [k for k in [os.getenv(f"EXA_API_KEY_{i}") for i in range(1, 7)] if k]
+
+    if not gemini_keys:
+        logger.warning("No Gemini API keys configured - AI features will not work")
+    if not exa_keys:
+        logger.warning("No EXA API keys configured - search features will not work")
+
+    logger.info(f"Environment validated: {len(gemini_keys)} Gemini keys, {len(exa_keys)} EXA keys")
+
+validate_environment()
+
+# ============================================================
+# RATE LIMITING
+# ============================================================
+
+class RateLimiter:
+    """Simple in-memory rate limiter"""
+
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.requests: Dict[str, List[float]] = defaultdict(list)
+
+    def is_allowed(self, client_id: str) -> bool:
+        """Check if request is allowed for client"""
+        now = time.time()
+        minute_ago = now - 60
+
+        # Clean old requests
+        self.requests[client_id] = [
+            req_time for req_time in self.requests[client_id]
+            if req_time > minute_ago
+        ]
+
+        # Check limit
+        if len(self.requests[client_id]) >= self.requests_per_minute:
+            return False
+
+        self.requests[client_id].append(now)
+        return True
+
+    def get_retry_after(self, client_id: str) -> int:
+        """Get seconds until next request is allowed"""
+        if not self.requests[client_id]:
+            return 0
+        oldest = min(self.requests[client_id])
+        return max(0, int(60 - (time.time() - oldest)))
+
+rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("RATE_LIMIT_PER_MINUTE", "100")))
 
 # ============================================================
 # CONFIGURATION
@@ -182,8 +265,8 @@ def log_stream(session_id: str, agent: str, msg_type: str, content: str):
             "content": content,
             "sequence_num": len(stream_logs[session_id])
         }).execute()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to save stream log: {e}")
 
 def get_tweepy_client(user_id: str) -> tweepy.Client:
     """Get authenticated tweepy client for user"""
@@ -466,8 +549,8 @@ def parse_json(text: str) -> Any:
         end = text.rfind(']') + 1
         if start >= 0 and end > start:
             return json.loads(text[start:end])
-    except:
-        pass
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.debug(f"Failed to parse JSON: {e}")
     return {"raw": text}
 
 # ============================================================
@@ -657,11 +740,11 @@ async def campaign_scheduler():
                         research = supabase.table("campaign_research").select("*").eq("session_id", session_id).execute()
                         if research.data:
                             active_sessions[session_id]["analysis"] = research.data[0].get("analysis", {})
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to load campaigns from database: {e}")
 
         except Exception as e:
-            print(f"[Scheduler] Error in main loop: {e}", flush=True)
+            logger.error(f"Scheduler error in main loop: {e}")
 
         await asyncio.sleep(30)  # Check every 30 seconds
 
@@ -1621,33 +1704,56 @@ class CampaignOrchestrator:
 # ============================================================
 
 class UserSignup(BaseModel):
-    username: str
-    email: str
-    password: str
+    username: str = Field(..., min_length=3, max_length=50, pattern=r'^[a-zA-Z0-9_]+$')
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=6, max_length=128)
+
+    @validator('email')
+    def validate_email(cls, v):
+        if '@' not in v or '.' not in v.split('@')[-1]:
+            raise ValueError('Invalid email format')
+        return v.lower().strip()
+
+    @validator('username')
+    def validate_username(cls, v):
+        return v.strip()
 
 class UserLogin(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=1, max_length=128)
+
+    @validator('email')
+    def validate_email(cls, v):
+        return v.lower().strip()
 
 class XCredentials(BaseModel):
-    consumer_key: str
-    consumer_secret: str
-    access_token: str
-    access_token_secret: str
+    consumer_key: str = Field(..., min_length=10, max_length=100)
+    consumer_secret: str = Field(..., min_length=10, max_length=100)
+    access_token: str = Field(..., min_length=10, max_length=100)
+    access_token_secret: str = Field(..., min_length=10, max_length=100)
 
 class CampaignInfo(BaseModel):
-    name: str
-    description: str
-    target_audience: str
-    goals: List[str]
-    duration_weeks: int = 3
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=10, max_length=5000)
+    target_audience: str = Field(..., min_length=1, max_length=500)
+    goals: List[str] = Field(..., min_items=1, max_items=20)
+    duration_weeks: int = Field(default=3, ge=1, le=52)
 
-# Password hashing
-import hashlib
-import secrets
+    @validator('name', 'description', 'target_audience')
+    def strip_strings(cls, v):
+        return v.strip()
 
+    @validator('goals')
+    def validate_goals(cls, v):
+        return [goal.strip() for goal in v if goal.strip()]
+
+class PlanFeedback(BaseModel):
+    approved: bool
+    feedback: Optional[str] = Field(None, max_length=2000)
+
+# Password hashing functions
 def hash_password(password: str) -> str:
-    """Hash password with salt"""
+    """Hash password with salt using PBKDF2"""
     salt = secrets.token_hex(16)
     hash_obj = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
     return f"{salt}:{hash_obj.hex()}"
@@ -1658,16 +1764,12 @@ def verify_password(password: str, stored_hash: str) -> bool:
         salt, hash_value = stored_hash.split(':')
         hash_obj = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
         return hash_obj.hex() == hash_value
-    except:
+    except (ValueError, AttributeError):
         return False
 
 def generate_token() -> str:
     """Generate a secure session token"""
     return secrets.token_urlsafe(32)
-
-class PlanFeedback(BaseModel):
-    approved: bool
-    feedback: Optional[str] = None
 
 # ============================================================
 # FASTAPI APP
@@ -1690,15 +1792,120 @@ async def lifespan(app: FastAPI):
             pass
     print("[Server] Scheduler stopped", flush=True)
 
-app = FastAPI(title="Marketing Campaign API", lifespan=lifespan)
+app = FastAPI(
+    title="Nexus Marketing Campaign API",
+    description="Production-ready marketing campaign automation API",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS Configuration - restrict in production
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
+    max_age=3600,
 )
+
+# Security middleware
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Add security headers and rate limiting"""
+    start_time = time.time()
+
+    # Get client identifier for rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    client_id = request.headers.get("Authorization", client_ip)
+
+    # Check rate limit
+    if not rate_limiter.is_allowed(client_id):
+        retry_after = rate_limiter.get_retry_after(client_id)
+        logger.warning(f"Rate limit exceeded for {client_ip}")
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests"},
+            headers={"Retry-After": str(retry_after)}
+        )
+
+    # Process request
+    response = await call_next(request)
+
+    # Add security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+    # Log request
+    process_time = time.time() - start_time
+    logger.info(f"{request.method} {request.url.path} - {response.status_code} - {process_time:.3f}s")
+
+    return response
+
+# Exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler for unhandled errors"""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
+
+# ============================================================
+# HEALTH CHECK ENDPOINTS
+# ============================================================
+
+@app.get("/health")
+async def health_check():
+    """Basic health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "1.0.0"
+    }
+
+@app.get("/health/detailed")
+async def detailed_health_check():
+    """Detailed health check with dependency status"""
+    health = {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "1.0.0",
+        "dependencies": {}
+    }
+
+    # Check Supabase connection
+    try:
+        result = supabase.table("users").select("id").limit(1).execute()
+        health["dependencies"]["database"] = "healthy"
+    except Exception as e:
+        health["dependencies"]["database"] = f"unhealthy: {str(e)}"
+        health["status"] = "degraded"
+
+    # Check API keys availability
+    gemini_available = sum(1 for k in GEMINI_PLANNER_KEYS + GEMINI_OTHER_KEYS if k)
+    exa_available = sum(1 for k in EXA_API_KEYS if k)
+
+    health["dependencies"]["gemini_keys"] = f"{gemini_available} available"
+    health["dependencies"]["exa_keys"] = f"{exa_available} available"
+
+    if gemini_available == 0:
+        health["status"] = "degraded"
+    if exa_available == 0:
+        health["status"] = "degraded"
+
+    # Active sessions count
+    health["metrics"] = {
+        "active_sessions": len(active_sessions),
+        "background_tasks": sum(1 for v in background_tasks_running.values() if v)
+    }
+
+    return health
 
 def get_user_id(authorization: str = Header(None)):
     """Validate session token and return user_id"""
@@ -2466,7 +2673,26 @@ async def get_timeline_view(session_id: str, user_id: str = Depends(get_user_id)
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n" + "="*60)
-    print("  MARKETING CAMPAIGN SERVER")
-    print("="*60 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # Server configuration from environment
+    HOST = os.getenv("HOST", "0.0.0.0")
+    PORT = int(os.getenv("PORT", "8000"))
+    WORKERS = int(os.getenv("WORKERS", "1"))
+    DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+    logger.info("=" * 60)
+    logger.info("  NEXUS MARKETING CAMPAIGN SERVER")
+    logger.info("=" * 60)
+    logger.info(f"  Host: {HOST}")
+    logger.info(f"  Port: {PORT}")
+    logger.info(f"  Debug: {DEBUG}")
+    logger.info("=" * 60)
+
+    uvicorn.run(
+        "main:app",
+        host=HOST,
+        port=PORT,
+        reload=DEBUG,
+        log_level="info" if not DEBUG else "debug",
+        access_log=True
+    )

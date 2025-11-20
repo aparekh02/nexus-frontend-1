@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Campaign Console</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="console-container">
+        <div class="console-header">
+            <div class="console-title">
+                <span class="title-icon">&#9670;</span>
+                NEXUS CAMPAIGN CONSOLE
+            </div>
+            <div class="console-status" id="status-bar">
+                <span id="user-status">Not logged in</span>
+                <span id="connection-status" class="disconnected">Disconnected</span>
+            </div>
+        </div>
+
+        <div class="console-output" id="output">
+            <div class="welcome-message">
+                <pre>
+╔══════════════════════════════════════════════════════════╗
+║           NEXUS MARKETING CAMPAIGN CONSOLE               ║
+║                                                          ║
+║  Type 'help' for available commands                      ║
+║  Type 'login' or 'signup' to get started                 ║
+╚══════════════════════════════════════════════════════════╝
+                </pre>
+            </div>
+        </div>
+
+        <div class="console-input-container">
+            <span class="prompt" id="prompt">guest@nexus:~$</span>
+            <input type="text" id="command-input" class="console-input" autofocus autocomplete="off" spellcheck="false">
+        </div>
+    </div>
+
+    <script src="api.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
