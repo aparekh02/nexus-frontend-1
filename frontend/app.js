@@ -941,7 +941,7 @@ class Console {
     setApiUrl(url) {
         if (!url) {
             this.print(`Current API URL: ${api.baseURL}`, 'info');
-            this.print('Usage: set-url http://your-api-url:8000', 'dim');
+            this.print('Usage: set-url https://your-api-url', 'dim');
             return;
         }
 

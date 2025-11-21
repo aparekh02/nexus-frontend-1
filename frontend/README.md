@@ -17,8 +17,7 @@ A web-based terminal console that connects to the Nexus Marketing Campaign Backe
 
    Edit `.env` to set your backend URL:
    ```
-   API_URL=http://localhost:8000
-   FRONTEND_PORT=3000
+   API_URL=https://nextous-api-398367759968.us-central1.run.app
    ```
 
 3. **Start the server:**
@@ -82,7 +81,7 @@ Make sure your backend is running before using the console:
 python main.py
 ```
 
-The backend should be available at `http://localhost:8000`.
+The backend is available at `https://nextous-api-398367759968.us-central1.run.app`.
 
 ## Features
 

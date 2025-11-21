@@ -4,8 +4,8 @@
 
 class NexusAPI {
     constructor() {
-        // Default to localhost, can be overridden
-        this.baseURL = 'http://localhost:8000';
+        // Production API URL
+        this.baseURL = 'https://nextous-api-398367759968.us-central1.run.app';
         this.token = null;
         this.userId = null;
         this.username = null;

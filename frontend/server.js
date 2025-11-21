@@ -8,8 +8,8 @@ const express = require('express');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.FRONTEND_PORT || 3000;
-const API_URL = process.env.API_URL || 'http://localhost:8000';
+const PORT = process.env.PORT || 3000;
+const API_URL = process.env.API_URL || 'https://nextous-api-398367759968.us-central1.run.app';
 
 // Serve static files
 app.use(express.static(__dirname));
