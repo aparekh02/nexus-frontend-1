@@ -913,7 +913,7 @@ class Console {
             return;
         }
 
-        this.print('Fetching trending topics...', 'dim');
+        this.print('Fetching trending topics from X and Internet...', 'dim');
         const result = await api.getTrending(query || 'trending topics today');
 
         if (result.error) {
@@ -921,21 +921,48 @@ class Console {
             return;
         }
 
-        this.printHeader('TRENDING TOPICS');
-
-        const trends = result.trends || [];
-        if (trends.length === 0) {
-            this.print('No trends found.', 'warning');
-            return;
-        }
-
-        for (let i = 0; i < Math.min(trends.length, 20); i++) {
-            const trend = trends[i];
-            this.printHTML(`<span class="output-cyan output-bold">${i + 1}.</span> ${trend.name || 'N/A'}`);
-            if (trend.snippet) {
-                this.print(`   ${trend.snippet.substring(0, 100)}...`, 'dim');
+        // Display X (Twitter) Trends
+        this.printHeader('🐦 X (TWITTER) TRENDS');
+        const xTrends = result.x_trends?.trends || [];
+        if (xTrends.length === 0) {
+            this.print('No X trends found. Make sure X credentials are configured.', 'warning');
+        } else {
+            this.print(`${result.x_trends.description}`, 'dim');
+            this.print('', '');
+            for (let i = 0; i < Math.min(xTrends.length, 10); i++) {
+                const trend = xTrends[i];
+                this.printHTML(`<span class="output-cyan output-bold">${i + 1}.</span> <span class="output-green">@${trend.username || 'unknown'}</span>`);
+                this.print(`   ${trend.name || trend.full_text || 'N/A'}`, 'info');
+                this.printHTML(`   <span class="output-dim">❤️ ${trend.likes || 0}  🔄 ${trend.retweets || 0}  💬 ${trend.replies || 0}</span>`);
+                if (trend.url) {
+                    this.print(`   ${trend.url}`, 'dim');
+                }
+                this.print('', '');
             }
         }
+
+        // Display Internet Trends
+        this.printHeader('🌐 INTERNET TRENDS');
+        const internetTrends = result.internet_trends?.trends || [];
+        if (internetTrends.length === 0) {
+            this.print('No internet trends found.', 'warning');
+        } else {
+            this.print(`${result.internet_trends.description}`, 'dim');
+            this.print('', '');
+            for (let i = 0; i < Math.min(internetTrends.length, 10); i++) {
+                const trend = internetTrends[i];
+                this.printHTML(`<span class="output-yellow output-bold">${i + 1}.</span> ${trend.name || 'N/A'}`);
+                if (trend.snippet) {
+                    this.print(`   ${trend.snippet.substring(0, 150)}...`, 'dim');
+                }
+                if (trend.url) {
+                    this.print(`   ${trend.url}`, 'dim');
+                }
+                this.print('', '');
+            }
+        }
+
+        this.print(`Total: ${result.total_count || 0} trending topics found`, 'success');
     }
 
     setApiUrl(url) {
