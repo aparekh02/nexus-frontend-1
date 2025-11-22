@@ -307,7 +307,7 @@ def get_tweepy_client(user_id: str) -> tweepy.Client:
 
 async def get_trending_topics(query: str = "trending topics today") -> List[Dict]:
     """
-    Get trending topics using EXA search
+    Get trending topics using EXA search (Internet trends)
 
     Args:
         query: Search query for trends
@@ -316,7 +316,7 @@ async def get_trending_topics(query: str = "trending topics today") -> List[Dict
         List of trending topics with title, url, etc.
     """
     try:
-        print(f"[Trending] Searching EXA for: {query}", flush=True)
+        print(f"[Trending/Internet] Searching EXA for: {query}", flush=True)
 
         results = await call_exa_search(query, num_results=20)
 
@@ -325,14 +325,106 @@ async def get_trending_topics(query: str = "trending topics today") -> List[Dict
             trending_list.append({
                 "name": result.get("title", ""),
                 "url": result.get("url", ""),
-                "snippet": result.get("text", result.get("snippet", ""))[:200]
+                "snippet": result.get("text", result.get("snippet", ""))[:200],
+                "source": "internet"
             })
 
-        print(f"[Trending] Found {len(trending_list)} trending topics", flush=True)
+        print(f"[Trending/Internet] Found {len(trending_list)} trending topics", flush=True)
         return trending_list
 
     except Exception as e:
-        print(f"[Trending] Error fetching trends: {e}", flush=True)
+        print(f"[Trending/Internet] Error fetching trends: {e}", flush=True)
+        return []
+
+
+async def get_x_trending(user_id: str, query: str = None) -> List[Dict]:
+    """
+    Get trending topics from X (Twitter) using recent popular tweets
+
+    Args:
+        user_id: User ID to get tweepy client
+        query: Optional search query (if None, searches for viral/trending content)
+
+    Returns:
+        List of trending X posts with content, metrics, etc.
+    """
+    try:
+        client = get_tweepy_client(user_id)
+
+        # Search queries to find trending content on X
+        search_queries = [
+            query if query else "viral OR trending",
+            "breaking news",
+            "what's happening"
+        ]
+
+        trending_list = []
+        seen_ids = set()
+
+        for search_query in search_queries[:1]:  # Use first query to avoid rate limits
+            try:
+                print(f"[Trending/X] Searching X for: {search_query}", flush=True)
+
+                # Search recent tweets with high engagement
+                tweets = client.search_recent_tweets(
+                    query=f"{search_query} -is:retweet lang:en",
+                    max_results=20,
+                    tweet_fields=["created_at", "public_metrics", "author_id", "text"],
+                    expansions=["author_id"],
+                    user_fields=["username", "name"]
+                )
+
+                if tweets.data:
+                    # Build user lookup
+                    users = {}
+                    if tweets.includes and "users" in tweets.includes:
+                        for user in tweets.includes["users"]:
+                            users[user.id] = {"username": user.username, "name": user.name}
+
+                    for tweet in tweets.data:
+                        if tweet.id in seen_ids:
+                            continue
+                        seen_ids.add(tweet.id)
+
+                        metrics = tweet.public_metrics or {}
+                        user_info = users.get(tweet.author_id, {})
+
+                        # Calculate engagement score
+                        engagement = (
+                            metrics.get("like_count", 0) +
+                            metrics.get("retweet_count", 0) * 2 +
+                            metrics.get("reply_count", 0)
+                        )
+
+                        trending_list.append({
+                            "name": tweet.text[:100] + "..." if len(tweet.text) > 100 else tweet.text,
+                            "full_text": tweet.text,
+                            "url": f"https://x.com/{user_info.get('username', 'i')}/status/{tweet.id}",
+                            "author": user_info.get("name", "Unknown"),
+                            "username": user_info.get("username", ""),
+                            "likes": metrics.get("like_count", 0),
+                            "retweets": metrics.get("retweet_count", 0),
+                            "replies": metrics.get("reply_count", 0),
+                            "engagement_score": engagement,
+                            "created_at": tweet.created_at.isoformat() if tweet.created_at else None,
+                            "source": "x"
+                        })
+
+            except Exception as e:
+                print(f"[Trending/X] Error searching X: {e}", flush=True)
+                continue
+
+        # Sort by engagement score
+        trending_list.sort(key=lambda x: x.get("engagement_score", 0), reverse=True)
+
+        print(f"[Trending/X] Found {len(trending_list)} trending posts from X", flush=True)
+        return trending_list[:15]  # Return top 15
+
+    except HTTPException:
+        print(f"[Trending/X] X credentials not configured for user", flush=True)
+        return []
+    except Exception as e:
+        print(f"[Trending/X] Error fetching X trends: {e}", flush=True)
         return []
 
 async def call_gemini_planner(prompt: str) -> str:
@@ -2148,20 +2240,38 @@ async def get_x_status(user_id: str = Depends(get_user_id)):
 
 @app.get("/trending")
 async def get_trending(query: str = "trending topics today", user_id: str = Depends(get_user_id)):
-    """Get current trending topics using EXA search"""
-    trends = await get_trending_topics(query)
+    """Get current trending topics from both X (Twitter) and Internet (EXA search)"""
 
-    if not trends:
-        return {
-            "message": "Could not fetch trends",
-            "trends": [],
-            "count": 0
-        }
+    # Fetch both sources in parallel
+    x_trends, internet_trends = await asyncio.gather(
+        get_x_trending(user_id, query),
+        get_trending_topics(query),
+        return_exceptions=True
+    )
+
+    # Handle exceptions
+    if isinstance(x_trends, Exception):
+        print(f"[Trending] X trends error: {x_trends}", flush=True)
+        x_trends = []
+    if isinstance(internet_trends, Exception):
+        print(f"[Trending] Internet trends error: {internet_trends}", flush=True)
+        internet_trends = []
 
     return {
-        "message": "Trending topics fetched successfully via EXA search",
-        "trends": trends,
-        "count": len(trends),
+        "message": "Trending topics fetched from X and Internet",
+        "x_trends": {
+            "source": "X (Twitter)",
+            "description": "Popular and viral posts from X",
+            "trends": x_trends,
+            "count": len(x_trends)
+        },
+        "internet_trends": {
+            "source": "Internet (EXA Search)",
+            "description": "Trending topics from across the web",
+            "trends": internet_trends,
+            "count": len(internet_trends)
+        },
+        "total_count": len(x_trends) + len(internet_trends),
         "fetched_at": datetime.utcnow().isoformat()
     }
 

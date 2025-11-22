@@ -8,8 +8,9 @@ import requests
 import time
 import sys
 import json
+import os
 
-API_URL = "http://localhost:8000"
+API_URL = os.environ.get("API_URL", "https://nextous-api-398367759968.us-central1.run.app")
 
 # Color codes
 class Colors:
